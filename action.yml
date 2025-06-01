@@ -1,0 +1,237 @@
+name: 'Update Homebrew Tap'
+description: 'Automatically update a Homebrew tap with new formula version'
+author: 'noClaps'
+
+inputs:
+  # Required inputs
+  tap_repo:
+    description: 'Homebrew tap repository (format: owner/homebrew-tap)'
+    required: true
+  
+  formula_name:
+    description: 'Name of the Homebrew formula'
+    required: true
+  
+  version:
+    description: 'Version string for the new release'
+    required: true
+  
+  tap_token:
+    description: 'GitHub token with write access to the tap repository (fine-grained token recommended)'
+    required: true
+  
+  # File inputs
+  macos_file:
+    description: 'Path to macOS ARM64 binary file'
+    required: false
+  
+  linux_file:
+    description: 'Path to Linux binary file'
+    required: false
+  
+  # Optional overrides (will be auto-detected if not provided)
+  description:
+    description: 'Brief description of the tool (auto-detected from repo if not provided)'
+    required: false
+  
+  homepage:
+    description: 'Homepage URL (auto-detected from repo if not provided)'
+    required: false
+  
+  license:
+    description: 'License identifier (auto-detected from repo if not provided)'
+    required: false
+  
+  commit_message:
+    description: 'Custom commit message'
+    required: false
+    default: 'Update {formula_name} to {version}'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Get repository information
+      shell: bash
+      id: repo_info
+      run: |
+        # Get repository info from GitHub API using built-in GITHUB_TOKEN
+        REPO_OWNER="${GITHUB_REPOSITORY%/*}"
+        REPO_NAME="${GITHUB_REPOSITORY#*/}"
+        
+        echo "repo_owner=$REPO_OWNER" >> $GITHUB_OUTPUT
+        echo "repo_name=$REPO_NAME" >> $GITHUB_OUTPUT
+        echo "repo_url=https://github.com/$GITHUB_REPOSITORY" >> $GITHUB_OUTPUT
+        
+        # Fetch repository metadata using the built-in token
+        REPO_DATA=$(curl -s -H "Authorization: token ${{ github.token }}" \
+          "https://api.github.com/repos/$GITHUB_REPOSITORY")
+        
+        # Extract description
+        REPO_DESCRIPTION=$(echo "$REPO_DATA" | jq -r '.description // ""')
+        echo "repo_description=$REPO_DESCRIPTION" >> $GITHUB_OUTPUT
+        
+        # Extract license
+        REPO_LICENSE=$(echo "$REPO_DATA" | jq -r '.license.spdx_id // ""')
+        if [[ "$REPO_LICENSE" == "null" || "$REPO_LICENSE" == "" ]]; then
+          REPO_LICENSE="Unknown"
+        fi
+        echo "repo_license=$REPO_LICENSE" >> $GITHUB_OUTPUT
+        
+        echo "Auto-detected repository info:"
+        echo "  Description: $REPO_DESCRIPTION"
+        echo "  License: $REPO_LICENSE"
+        echo "  Homepage: https://github.com/$GITHUB_REPOSITORY"
+
+    - name: Calculate file hashes and prepare URLs
+      shell: bash
+      id: file_info
+      run: |
+        REPO_OWNER="${{ steps.repo_info.outputs.repo_owner }}"
+        REPO_NAME="${{ steps.repo_info.outputs.repo_name }}"
+        VERSION="${{ inputs.version }}"
+        
+        # Clean version (remove 'v' prefix if present)
+        CLEAN_VERSION="${VERSION#v}"
+        
+        # Process macOS file
+        if [[ -n "${{ inputs.macos_file }}" && -f "${{ inputs.macos_file }}" ]]; then
+          MACOS_SHA256=$(sha256sum "${{ inputs.macos_file }}" | cut -d' ' -f1)
+          MACOS_FILENAME=$(basename "${{ inputs.macos_file }}")
+          MACOS_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${VERSION}/${MACOS_FILENAME}"
+          
+          echo "macos_sha256=$MACOS_SHA256" >> $GITHUB_OUTPUT
+          echo "macos_url=$MACOS_URL" >> $GITHUB_OUTPUT
+          echo "has_macos=true" >> $GITHUB_OUTPUT
+          
+          echo "macOS file info:"
+          echo "  File: $MACOS_FILENAME"
+          echo "  SHA256: $MACOS_SHA256"
+          echo "  URL: $MACOS_URL"
+        else
+          echo "has_macos=false" >> $GITHUB_OUTPUT
+        fi
+        
+        # Process Linux file
+        if [[ -n "${{ inputs.linux_file }}" && -f "${{ inputs.linux_file }}" ]]; then
+          LINUX_SHA256=$(sha256sum "${{ inputs.linux_file }}" | cut -d' ' -f1)
+          LINUX_FILENAME=$(basename "${{ inputs.linux_file }}")
+          LINUX_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${VERSION}/${LINUX_FILENAME}"
+          
+          echo "linux_sha256=$LINUX_SHA256" >> $GITHUB_OUTPUT
+          echo "linux_url=$LINUX_URL" >> $GITHUB_OUTPUT
+          echo "has_linux=true" >> $GITHUB_OUTPUT
+          
+          echo "Linux file info:"
+          echo "  File: $LINUX_FILENAME"
+          echo "  SHA256: $LINUX_SHA256"
+          echo "  URL: $LINUX_URL"
+        else
+          echo "has_linux=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Checkout tap repository
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ inputs.tap_repo }}
+        token: ${{ inputs.tap_token }}
+        path: tap-repo
+
+    - name: Generate formula content
+      shell: bash
+      run: |
+        FORMULA_NAME="${{ inputs.formula_name }}"
+        VERSION="${{ inputs.version }}"
+        
+        # Use provided values or fall back to auto-detected ones
+        DESCRIPTION="${{ inputs.description }}"
+        if [[ -z "$DESCRIPTION" ]]; then
+          DESCRIPTION="${{ steps.repo_info.outputs.repo_description }}"
+        fi
+        
+        HOMEPAGE="${{ inputs.homepage }}"
+        if [[ -z "$HOMEPAGE" ]]; then
+          HOMEPAGE="${{ steps.repo_info.outputs.repo_url }}"
+        fi
+        
+        LICENSE="${{ inputs.license }}"
+        if [[ -z "$LICENSE" ]]; then
+          LICENSE="${{ steps.repo_info.outputs.repo_license }}"
+        fi
+        
+        # Create formula directory if it doesn't exist
+        mkdir -p "tap-repo/Formula"
+        
+        # Capitalize first letter of formula name for class name
+        CLASS_NAME="$(echo "${FORMULA_NAME:0:1}" | tr '[:lower:]' '[:upper:]')${FORMULA_NAME:1}"
+        
+        # Start building the formula
+        cat > "tap-repo/Formula/${FORMULA_NAME}.rb" << EOL
+        class ${CLASS_NAME} < Formula
+          desc "${DESCRIPTION}"
+          homepage "${HOMEPAGE}"
+          version "${VERSION}"
+          license "${LICENSE}"
+        
+        EOL
+        
+        # Add platform-specific downloads
+        if [[ "${{ steps.file_info.outputs.has_macos }}" == "true" ]]; then
+          cat >> "tap-repo/Formula/${FORMULA_NAME}.rb" << EOL
+          if OS.mac? && Hardware::CPU.arm?
+            url "${{ steps.file_info.outputs.macos_url }}"
+            sha256 "${{ steps.file_info.outputs.macos_sha256 }}"
+          end
+        
+        EOL
+        fi
+        
+        if [[ "${{ steps.file_info.outputs.has_linux }}" == "true" ]]; then
+          cat >> "tap-repo/Formula/${FORMULA_NAME}.rb" << EOL
+          if OS.linux?
+            url "${{ steps.file_info.outputs.linux_url }}"
+            sha256 "${{ steps.file_info.outputs.linux_sha256 }}"
+          end
+        
+        EOL
+        fi
+        
+        # Add installation instructions
+        cat >> "tap-repo/Formula/${FORMULA_NAME}.rb" << EOL
+          def install
+            bin.install "${FORMULA_NAME}"
+          end
+        
+          test do
+            system "#{bin}/${FORMULA_NAME}", "--version"
+          end
+        end
+        EOL
+        
+        echo "Generated formula:"
+        cat "tap-repo/Formula/${FORMULA_NAME}.rb"
+
+    - name: Commit and push changes
+      shell: bash
+      working-directory: tap-repo
+      run: |
+        git config user.name "GitHub Action"
+        git config user.email "action@github.com"
+        
+        git add "Formula/${{ inputs.formula_name }}.rb"
+        
+        # Create commit message
+        COMMIT_MSG="${{ inputs.commit_message }}"
+        COMMIT_MSG="${COMMIT_MSG/\{formula_name\}/${{ inputs.formula_name }}}"
+        COMMIT_MSG="${COMMIT_MSG/\{version\}/${{ inputs.version }}}"
+        
+        if git diff --staged --quiet; then
+          echo "No changes to commit"
+          exit 0
+        fi
+        
+        git commit -m "$COMMIT_MSG"
+        git push origin main
+
+branding:
+  icon: 'package'
+  color: 'orange'
