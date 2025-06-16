@@ -1,6 +1,6 @@
 name: 'Update Homebrew Tap'
 description: 'Automatically update a Homebrew tap with new formula version'
-author: 'Your Name'
+author: 'noClaps'
 
 inputs:
   # Required inputs
