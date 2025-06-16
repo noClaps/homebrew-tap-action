@@ -1,6 +1,6 @@
 name: 'Update Homebrew Tap'
 description: 'Automatically update a Homebrew tap with new formula version'
-author: 'noClaps'
+author: 'Your Name'
 
 inputs:
   # Required inputs
@@ -46,6 +46,12 @@ inputs:
     description: 'Custom commit message'
     required: false
     default: 'Update {formula_name} to {version}'
+  
+  # Shell completions
+  completion_command:
+    description: 'Command to generate completions (e.g., "completion", "completions --shell")'
+    required: false
+    default: ''
 
 runs:
   using: 'composite'
@@ -199,6 +205,18 @@ runs:
         cat >> "tap-repo/Formula/${FORMULA_NAME}.rb" << EOL
           def install
             bin.install "${FORMULA_NAME}"
+        EOL
+        
+        # Add shell completions if enabled
+        if [[ "${{ inputs.completion_command }}" != "" ]]; then
+          cat >> "tap-repo/Formula/${FORMULA_NAME}.rb" << EOL
+        
+            # Generate shell completions
+            generate_completions_from_executable(bin/"${FORMULA_NAME}", "${{ inputs.completion_command }}")
+        EOL
+        fi
+        
+        cat >> "tap-repo/Formula/${FORMULA_NAME}.rb" << EOL
           end
         
           test do
