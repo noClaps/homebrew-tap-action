@@ -136,7 +136,7 @@ runs:
         fi
 
     - name: Checkout tap repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
       with:
         repository: ${{ inputs.tap_repo }}
         token: ${{ inputs.tap_token }}
